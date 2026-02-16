@@ -1,0 +1,1583 @@
+<!DOCTYPE html>
+<html lang="es">
+<head>
+<meta charset="UTF-8">
+<title>ESCAPE DE LA FÁBRICA - Misión FBI</title>
+<style>
+@import url('https://fonts.googleapis.com/css2?family=Press+Start+2P&display=swap');
+*{margin:0;padding:0;box-sizing:border-box}
+body{background:#000;overflow:hidden;cursor:none;display:flex;align-items:center;justify-content:center;height:100vh;width:100vw}
+canvas{image-rendering:pixelated;image-rendering:crisp-edges}
+</style>
+</head>
+<body>
+<canvas id="display"></canvas>
+<script>
+// ═══════════════════════════════════════════════════════════════
+// CONFIGURACIÓN GENERAL
+// ═══════════════════════════════════════════════════════════════
+const GAME_W = 400, GAME_H = 320;
+const TILE = 16;
+const MAP_W = 25, MAP_H = 18;
+const HUD_Y = MAP_H * TILE;
+const SURVIVAL_TIME = 220; // 3 min 40 seg
+const PLAYER_SPEED = 1.4;
+const ROBOT_BASE_SPEED = 0.55;
+const ROBOT_MAX_SPEED = 1.45;
+
+// ═══════════════════════════════════════════════════════════════
+// CANVAS SETUP
+// ═══════════════════════════════════════════════════════════════
+const displayCanvas = document.getElementById('display');
+const displayCtx = displayCanvas.getContext('2d');
+const buffer = document.createElement('canvas');
+buffer.width = GAME_W; buffer.height = GAME_H;
+const ctx = buffer.getContext('2d');
+
+function resize() {
+    const aspect = GAME_W / GAME_H;
+    let w = window.innerWidth, h = window.innerHeight;
+    if (w / h > aspect) { w = h * aspect; } else { h = w / aspect; }
+    displayCanvas.width = Math.floor(w);
+    displayCanvas.height = Math.floor(h);
+    displayCtx.imageSmoothingEnabled = false;
+}
+window.addEventListener('resize', resize);
+resize();
+
+// ═══════════════════════════════════════════════════════════════
+// MAPA DE LA FÁBRICA
+// ═══════════════════════════════════════════════════════════════
+// 0=piso, 1=muro, 2=puerta salida, 5=maquinaria
+const MAP = [
+[1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1],
+[1,0,0,0,1,0,0,0,0,0,0,0,1,0,0,0,0,0,0,0,0,0,0,0,1],
+[1,0,0,0,1,0,0,0,0,0,0,0,1,0,0,0,0,0,0,0,5,0,0,0,1],
+[1,0,0,0,1,0,0,5,1,0,1,0,1,0,0,0,0,0,0,0,0,0,0,0,1],
+[1,0,0,0,0,0,0,0,0,0,0,0,0,0,0,1,1,1,1,0,0,1,1,0,1],
+[1,0,0,0,0,0,0,0,0,0,0,0,0,0,0,1,0,0,0,0,0,0,1,0,1],
+[1,1,1,0,1,1,1,1,0,0,1,1,1,0,0,1,0,0,0,5,0,0,1,0,1],
+[1,0,0,0,0,0,0,0,0,0,0,0,1,0,0,0,0,0,0,0,0,0,1,1,1],
+[1,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,1],
+[1,0,5,0,0,0,1,1,0,1,0,0,0,0,0,0,0,0,0,0,0,0,0,0,1],
+[1,0,0,0,0,0,1,0,0,0,0,0,1,0,0,1,0,0,0,0,0,1,0,1,1],
+[1,0,0,0,0,0,1,0,0,0,5,0,1,0,0,1,0,0,0,0,0,1,0,0,1],
+[1,1,1,0,1,1,1,1,0,1,1,1,1,0,0,1,1,1,0,1,1,1,0,0,1],
+[1,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,1],
+[1,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,5,0,0,0,0,0,0,1],
+[1,0,0,0,1,0,0,0,0,0,5,0,1,0,0,0,0,0,0,0,0,0,0,0,1],
+[1,0,0,0,1,0,0,0,0,0,0,0,1,0,0,0,0,0,0,0,1,0,0,2,1],
+[1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1]
+];
+
+// ═══════════════════════════════════════════════════════════════
+// SISTEMA DE AUDIO (WebKit AudioContext)
+// ═══════════════════════════════════════════════════════════════
+let audioCtx = null, masterGain = null, musicInterval = null;
+let proximityOsc = null, proximityGain = null;
+let musicPlaying = false;
+
+function initAudio() {
+    if (audioCtx) return;
+    const AC = window.AudioContext || window.webkitAudioContext;
+    if (!AC) return;
+    audioCtx = new AC();
+    masterGain = audioCtx.createGain();
+    masterGain.gain.value = 0.35;
+    masterGain.connect(audioCtx.destination);
+}
+
+function noteFreq(note) {
+    const notes = {C:0,'C#':1,D:2,'D#':3,E:4,F:5,'F#':6,G:7,'G#':8,A:9,'A#':10,B:11};
+    const match = note.match(/^([A-G]#?)(\d)$/);
+    if (!match) return 0;
+    const semitone = notes[match[1]];
+    const octave = parseInt(match[2]);
+    return 440 * Math.pow(2, (semitone - 9) / 12 + (octave - 4));
+}
+
+function playTone(freq, type, vol, dur, detune) {
+    if (!audioCtx) return;
+    const osc = audioCtx.createOscillator();
+    const gain = audioCtx.createGain();
+    osc.type = type || 'square';
+    osc.frequency.value = freq;
+    if (detune) osc.detune.value = detune;
+    gain.gain.value = vol || 0.1;
+    gain.gain.exponentialRampToValueAtTime(0.001, audioCtx.currentTime + dur);
+    osc.connect(gain);
+    gain.connect(masterGain);
+    osc.start();
+    osc.stop(audioCtx.currentTime + dur + 0.05);
+}
+
+function playNoise(vol, dur) {
+    if (!audioCtx) return;
+    const bufSize = audioCtx.sampleRate * dur;
+    const buf = audioCtx.createBuffer(1, bufSize, audioCtx.sampleRate);
+    const data = buf.getChannelData(0);
+    for (let i = 0; i < bufSize; i++) data[i] = Math.random() * 2 - 1;
+    const src = audioCtx.createBufferSource();
+    src.buffer = buf;
+    const gain = audioCtx.createGain();
+    gain.gain.value = vol;
+    gain.gain.exponentialRampToValueAtTime(0.001, audioCtx.currentTime + dur);
+    const filter = audioCtx.createBiquadFilter();
+    filter.type = 'highpass';
+    filter.frequency.value = 3000;
+    src.connect(filter);
+    filter.connect(gain);
+    gain.connect(masterGain);
+    src.start();
+    src.stop(audioCtx.currentTime + dur + 0.05);
+}
+
+function playSFX(name) {
+    if (!audioCtx) return;
+    const t = audioCtx.currentTime;
+    switch(name) {
+        case 'hit':
+            playNoise(0.3, 0.15);
+            playTone(80, 'sawtooth', 0.2, 0.2);
+            break;
+        case 'pickup':
+            playTone(noteFreq('C5'), 'square', 0.12, 0.08);
+            setTimeout(() => playTone(noteFreq('E5'), 'square', 0.12, 0.08), 60);
+            setTimeout(() => playTone(noteFreq('G5'), 'square', 0.12, 0.15), 120);
+            break;
+        case 'emp':
+            for (let i = 0; i < 8; i++) {
+                setTimeout(() => playTone(800 - i*80, 'sawtooth', 0.15 - i*0.015, 0.06), i * 30);
+            }
+            playNoise(0.25, 0.4);
+            break;
+        case 'shield':
+            playTone(noteFreq('E4'), 'triangle', 0.15, 0.3);
+            setTimeout(() => playTone(noteFreq('G4'), 'triangle', 0.12, 0.3), 100);
+            break;
+        case 'speed':
+            for (let i = 0; i < 5; i++) {
+                setTimeout(() => playTone(noteFreq('C4') + i * 60, 'square', 0.08, 0.06), i * 40);
+            }
+            break;
+        case 'trap':
+            playTone(120, 'square', 0.15, 0.2);
+            playNoise(0.15, 0.1);
+            break;
+        case 'npcDeath':
+            playTone(200, 'sawtooth', 0.15, 0.3);
+            setTimeout(() => playTone(150, 'sawtooth', 0.12, 0.4), 150);
+            break;
+        case 'robotStep':
+            playTone(60, 'square', 0.04, 0.05);
+            break;
+        case 'doorOpen':
+            for (let i = 0; i < 6; i++) {
+                setTimeout(() => playTone(noteFreq('C4') + i * 50, 'triangle', 0.12, 0.15), i * 80);
+            }
+            break;
+        case 'victory':
+            const vNotes = ['C4','E4','G4','C5','E5','G5'];
+            vNotes.forEach((n, i) => {
+                setTimeout(() => playTone(noteFreq(n), 'square', 0.15, 0.25), i * 120);
+            });
+            break;
+        case 'gameOver':
+            const goNotes = ['E4','D4','C4','B3','A3'];
+            goNotes.forEach((n, i) => {
+                setTimeout(() => playTone(noteFreq(n), 'sawtooth', 0.15, 0.3), i * 200);
+            });
+            break;
+        case 'warning':
+            playTone(noteFreq('A5'), 'square', 0.12, 0.1);
+            setTimeout(() => playTone(noteFreq('A5'), 'square', 0.12, 0.1), 200);
+            break;
+        case 'shieldBlock':
+            playTone(1200, 'triangle', 0.2, 0.15);
+            playNoise(0.15, 0.1);
+            break;
+    }
+}
+
+// Música chiptune oscura cyberpunk
+const bassPattern =  ['A2','A2','0','A2','C3','C3','0','C3','D3','D3','0','D3','E3','E3','D3','C3'];
+const melodyPattern = ['A4','0','E4','0','C4','D4','E4','0','F4','0','E4','0','D4','C4','B3','0'];
+const arpPattern =   ['A3','C4','E4','A4','E4','C4','A3','C4','D4','F4','A4','F4','D4','A3','E4','C4'];
+let beatIndex = 0;
+
+function startMusic() {
+    if (!audioCtx || musicPlaying) return;
+    musicPlaying = true;
+    beatIndex = 0;
+    doMusicBeat();
+}
+
+function doMusicBeat() {
+    if (!musicPlaying) return;
+    const tempo = state.timeLeft < 30 ? 195 : state.timeLeft < 60 ? 168 : 140;
+    const beatMs = 60000 / tempo;
+    const beatSec = beatMs / 1000;
+    const bi = beatIndex % bassPattern.length;
+
+    // Bass
+    const bassNote = bassPattern[bi];
+    if (bassNote !== '0') playTone(noteFreq(bassNote), 'square', 0.09, beatSec * 0.7);
+    // Melody
+    const melNote = melodyPattern[bi];
+    if (melNote !== '0') playTone(noteFreq(melNote), 'triangle', 0.055, beatSec * 0.5);
+    // Arp (quiet background texture)
+    const arpNote = arpPattern[bi];
+    if (arpNote !== '0') playTone(noteFreq(arpNote), 'square', 0.025, beatSec * 0.3, 7);
+    // Percussion
+    if (bi % 4 === 0) playNoise(0.06, 0.08);
+    if (bi % 2 === 0) playNoise(0.025, 0.03);
+
+    beatIndex++;
+    musicInterval = setTimeout(doMusicBeat, beatMs);
+}
+
+function stopMusic() {
+    musicPlaying = false;
+    if (musicInterval) { clearTimeout(musicInterval); musicInterval = null; }
+}
+
+function updateProximity() {
+    if (!audioCtx || !state.player.alive) return;
+    const dist = distBetween(state.player, state.robot);
+    const maxD = 120;
+    if (dist < maxD) {
+        if (!proximityOsc) {
+            proximityOsc = audioCtx.createOscillator();
+            proximityGain = audioCtx.createGain();
+            proximityOsc.type = 'sine';
+            proximityOsc.connect(proximityGain);
+            proximityGain.connect(masterGain);
+            proximityOsc.start();
+        }
+        const intensity = 1 - (dist / maxD);
+        proximityOsc.frequency.value = 200 + intensity * 500;
+        proximityGain.gain.value = intensity * 0.07;
+    } else if (proximityGain) {
+        proximityGain.gain.value = 0;
+    }
+}
+
+// ═══════════════════════════════════════════════════════════════
+// INPUT
+// ═══════════════════════════════════════════════════════════════
+const keys = {};
+document.addEventListener('keydown', e => {
+    keys[e.code] = true;
+    if (!audioCtx) initAudio();
+    if (audioCtx && audioCtx.state === 'suspended') audioCtx.resume();
+    if (e.code === 'Enter') handleEnter();
+    if (e.code === 'Space') handleSpace();
+    e.preventDefault();
+});
+document.addEventListener('keyup', e => { keys[e.code] = false; });
+// Touch para movil
+document.addEventListener('touchstart', () => {
+    if (!audioCtx) initAudio();
+    if (audioCtx && audioCtx.state === 'suspended') audioCtx.resume();
+});
+
+function handleEnter() {
+    if (state.screen === 'title') { startGame(); }
+    else if (state.screen === 'gameover' || state.screen === 'victory') { resetGame(); }
+}
+
+function handleSpace() {
+    if (state.screen === 'playing' && state.player.powerUp) {
+        usePowerUp();
+    }
+}
+
+// ═══════════════════════════════════════════════════════════════
+// ESTADO DEL JUEGO
+// ═══════════════════════════════════════════════════════════════
+let state = {};
+
+function makeEntity(x, y, type, opts) {
+    return {
+        x: x * TILE + TILE/2, y: y * TILE + TILE/2,
+        w: type === 'robot' ? 13 : 10, h: type === 'robot' ? 13 : 10,
+        speed: opts.speed || 1, health: opts.health || 3, maxHealth: opts.health || 3,
+        alive: true, type: type,
+        behavior: opts.behavior || '', name: opts.name || '',
+        color: opts.color || '#fff',
+        facing: 1, frame: 0, animTimer: 0, moving: false,
+        invincible: 0, stunned: 0, cooldown: 0,
+        powerUp: null, speedBoost: 0, shield: false,
+        wanderDir: null, wanderTimer: 0,
+        shoutText: '', shoutTimer: 0,
+        stunCooldown: 0,
+        stuckCounter: 0, lastX: 0, lastY: 0, unstuckTimer: 0
+    };
+}
+
+const POWERUP_TYPES = ['emp','velocidad','escudo','trampa'];
+const POWERUP_NAMES = {emp:'PULSO EMP',velocidad:'VELOCIDAD',escudo:'ESCUDO',trampa:'TRAMPA'};
+const POWERUP_COLORS = {emp:'#aa44ff',velocidad:'#ffdd00',escudo:'#00ddff',trampa:'#ff8800'};
+const POWERUP_SPOTS = [{x:2,y:2},{x:10,y:1},{x:19,y:6},{x:7,y:9},{x:22,y:11},{x:3,y:14},{x:17,y:14}];
+
+function resetGame() {
+    state = {
+        screen: 'title',
+        timeLeft: SURVIVAL_TIME,
+        frameCount: 0,
+        timer: 0,
+        doorsOpen: false,
+        shakeX: 0, shakeY: 0,shakeTimer: 0,
+        messages: [],
+        particles: [],
+        traps: [],
+        player: makeEntity(2, 15, 'player', {speed: PLAYER_SPEED, health: 3, name: 'Jugador', color: '#00ff41'}),
+        robot: makeEntity(12, 8, 'robot', {speed: ROBOT_BASE_SPEED, health: 100, name: 'ROBOT X-7', color: '#e94560'}),
+        npcs: [
+            makeEntity(5, 2, 'npc', {speed: 0.85, health: 2, behavior: 'helper', name: 'Ag. Martínez', color: '#00d4ff'}),
+            makeEntity(20, 3, 'npc', {speed: 0.95, health: 2, behavior: 'fighter', name: 'Ag. Chen', color: '#ff8800'}),
+            makeEntity(15, 14, 'npc', {speed: 1.0, health: 1, behavior: 'runner', name: 'Ag. Williams', color: '#ffdd00'}),
+            makeEntity(8, 13, 'npc', {speed: 0.7, health: 1, behavior: 'panicker', name: 'Dr. Kowalski', color: '#cccccc'}),
+            makeEntity(20, 15, 'npc', {speed: 0.9, health: 2, behavior: 'helper', name: 'Ag. Rodríguez', color: '#44ff88'}),
+        ],
+        powerUps: [],
+        robotActivated: false,
+        activationTimer: 180, // 3 seconds before robot activates
+        warningFlags: {w60: false, w30: false, w10: false},
+        npcsSurvived: 5,
+        powerUpsUsed: 0,
+    };
+    spawnAllPowerUps();
+}
+
+function spawnAllPowerUps() {
+    state.powerUps = POWERUP_SPOTS.map(spot => ({
+        x: spot.x * TILE + TILE/2, y: spot.y * TILE + TILE/2,
+        type: POWERUP_TYPES[Math.floor(Math.random() * POWERUP_TYPES.length)],
+        active: true, respawnTimer: 0
+    }));
+}
+
+function startGame() {
+    state.screen = 'playing';
+    state.frameCount = 0;
+    state.timer = 0;
+    addMessage('¡MISIÓN: SOBREVIVE 3:40!', '#00ff41', 180);
+    setTimeout(() => addMessage('¡EL ROBOT X-7 SE HA ACTIVADO!', '#ff0000', 180), 3200);
+    startMusic();
+}
+
+// ═══════════════════════════════════════════════════════════════
+// UTILIDADES
+// ═══════════════════════════════════════════════════════════════
+function distBetween(a, b) {
+    const dx = a.x - b.x, dy = a.y - b.y;
+    return Math.sqrt(dx * dx + dy * dy);
+}
+
+function getTile(px, py) {
+    const tx = Math.floor(px / TILE), ty = Math.floor(py / TILE);
+    if (tx < 0 || tx >= MAP_W || ty < 0 || ty >= MAP_H) return 1;
+    return MAP[ty][tx];
+}
+
+function isSolid(tile) { return tile === 1 || tile === 5; }
+function isDoor(tile) { return tile === 2; }
+
+function canMoveTo(entity, nx, ny) {
+    const hw = entity.w / 2, hh = entity.h / 2;
+    const corners = [
+        {x: nx - hw + 1, y: ny - hh + 1},
+        {x: nx + hw - 1, y: ny - hh + 1},
+        {x: nx - hw + 1, y: ny + hh - 1},
+        {x: nx + hw - 1, y: ny + hh - 1}
+    ];
+    for (const c of corners) {
+        const t = getTile(c.x, c.y);
+        if (isSolid(t)) return false;
+        if (isDoor(t) && !state.doorsOpen) return false;
+    }
+    return true;
+}
+
+function moveEntityDir(entity, dx, dy) {
+    let moved = false;
+    if (dx !== 0) {
+        if (canMoveTo(entity, entity.x + dx, entity.y)) { entity.x += dx; moved = true; }
+    }
+    if (dy !== 0) {
+        if (canMoveTo(entity, entity.x, entity.y + dy)) { entity.y += dy; moved = true; }
+    }
+    if (dx > 0.05) entity.facing = 1;
+    if (dx < -0.05) entity.facing = -1;
+    entity.moving = moved;
+    if (moved) {
+        entity.animTimer++;
+        if (entity.animTimer > 8) { entity.frame = (entity.frame + 1) % 4; entity.animTimer = 0; }
+    }
+    return moved;
+}
+
+// ═══════════════════════════════════════════════════════════════
+// BFS PATHFINDING (tile-based, 25x18 grid = fast)
+// ═══════════════════════════════════════════════════════════════
+function tileWalkable(tx, ty) {
+    if (tx < 0 || tx >= MAP_W || ty < 0 || ty >= MAP_H) return false;
+    const t = MAP[ty][tx];
+    if (t === 1 || t === 5) return false;
+    if (t === 2 && !state.doorsOpen) return false;
+    return true;
+}
+
+// BFS: returns array of {tx,ty} tile coords from start to goal (or null)
+// Caches path on the entity to avoid recomputing every frame
+function findPath(entity, targetX, targetY) {
+    const sx = Math.floor(entity.x / TILE), sy = Math.floor(entity.y / TILE);
+    const gx = Math.floor(targetX / TILE), gy = Math.floor(targetY / TILE);
+
+    // If already at goal tile
+    if (sx === gx && sy === gy) return [];
+
+    // Check cache: if entity already has a valid path to same goal tile, reuse it
+    if (entity._pathGoalX === gx && entity._pathGoalY === gy &&
+        entity._pathAge < 30 && entity._path && entity._path.length > 0) {
+        entity._pathAge++;
+        return entity._path;
+    }
+
+    const visited = new Uint8Array(MAP_W * MAP_H);
+    const prev = new Int16Array(MAP_W * MAP_H).fill(-1);
+    const queue = [];
+    const startKey = sy * MAP_W + sx;
+    visited[startKey] = 1;
+    queue.push(startKey);
+
+    const dirs4 = [[1,0],[-1,0],[0,1],[0,-1]];
+    let found = false;
+    const goalKey = gy * MAP_W + gx;
+
+    let head = 0;
+    while (head < queue.length) {
+        const key = queue[head++];
+        if (key === goalKey) { found = true; break; }
+        const cx = key % MAP_W, cy = (key - cx) / MAP_W;
+        for (const [ddx, ddy] of dirs4) {
+            const nx = cx + ddx, ny = cy + ddy;
+            if (!tileWalkable(nx, ny)) continue;
+            const nk = ny * MAP_W + nx;
+            if (visited[nk]) continue;
+            visited[nk] = 1;
+            prev[nk] = key;
+            queue.push(nk);
+        }
+    }
+
+    if (!found) {
+        entity._path = null; entity._pathAge = 999;
+        return null;
+    }
+
+    // Reconstruct path
+    const path = [];
+    let ck = goalKey;
+    while (ck !== startKey && ck >= 0) {
+        const cx = ck % MAP_W, cy = (ck - cx) / MAP_W;
+        path.push({tx: cx, ty: cy});
+        ck = prev[ck];
+    }
+    path.reverse();
+
+    // Cache
+    entity._path = path;
+    entity._pathGoalX = gx;
+    entity._pathGoalY = gy;
+    entity._pathAge = 0;
+
+    return path;
+}
+
+// Move entity along BFS path toward target. Returns true if moving.
+function moveToward(entity, target) {
+    const path = findPath(entity, target.x, target.y);
+
+    // No path found or already there - try direct movement as fallback
+    if (!path || path.length === 0) {
+        const dx = target.x - entity.x, dy = target.y - entity.y;
+        const dist = Math.sqrt(dx*dx + dy*dy);
+        if (dist < 2) return false;
+        const ndx = (dx/dist) * entity.speed, ndy = (dy/dist) * entity.speed;
+        return moveEntityDir(entity, ndx, ndy);
+    }
+
+    // Get the next waypoint: first tile in path, use its center
+    let wp = path[0];
+    const wpx = wp.tx * TILE + TILE/2;
+    const wpy = wp.ty * TILE + TILE/2;
+    const dx = wpx - entity.x, dy = wpy - entity.y;
+    const dist = Math.sqrt(dx*dx + dy*dy);
+
+    // If close to waypoint, advance to next
+    if (dist < 3 && path.length > 1) {
+        path.shift();
+        wp = path[0];
+        const wx2 = wp.tx * TILE + TILE/2;
+        const wy2 = wp.ty * TILE + TILE/2;
+        const dx2 = wx2 - entity.x, dy2 = wy2 - entity.y;
+        const d2 = Math.sqrt(dx2*dx2 + dy2*dy2);
+        if (d2 > 0.5) {
+            return moveEntityDir(entity, (dx2/d2)*entity.speed, (dy2/d2)*entity.speed);
+        }
+        return false;
+    }
+
+    if (dist > 0.5) {
+        return moveEntityDir(entity, (dx/dist)*entity.speed, (dy/dist)*entity.speed);
+    }
+    return false;
+}
+
+// Flee: find the floor tile farthest from threat that is reachable within a few tiles
+function flee(entity, threat) {
+    const ex = Math.floor(entity.x / TILE), ey = Math.floor(entity.y / TILE);
+    const thx = Math.floor(threat.x / TILE), thy = Math.floor(threat.y / TILE);
+
+    // Collect nearby walkable tiles within 5 tile radius
+    let bestTile = null, bestScore = -Infinity;
+    for (let dy = -5; dy <= 5; dy++) {
+        for (let dx = -5; dx <= 5; dx++) {
+            const tx = ex + dx, ty = ey + dy;
+            if (!tileWalkable(tx, ty)) continue;
+            // Score = distance from threat - distance from entity (prefer far from threat, close to entity)
+            const distFromThreat = Math.abs(tx - thx) + Math.abs(ty - thy);
+            const distFromMe = Math.abs(dx) + Math.abs(dy);
+            const score = distFromThreat * 2 - distFromMe;
+            if (score > bestScore) {
+                bestScore = score;
+                bestTile = {x: tx * TILE + TILE/2, y: ty * TILE + TILE/2};
+            }
+        }
+    }
+
+    if (bestTile) {
+        moveToward(entity, bestTile);
+    } else {
+        wander(entity);
+    }
+}
+
+function wander(entity) {
+    entity.wanderTimer--;
+    if (!entity.wanderDir || entity.wanderTimer <= 0) {
+        const dirs = [[1,0],[-1,0],[0,1],[0,-1],[0.7,0.7],[-0.7,0.7],[0.7,-0.7],[-0.7,-0.7]];
+        entity.wanderDir = dirs[Math.floor(Math.random() * dirs.length)];
+        entity.wanderTimer = 40 + Math.floor(Math.random() * 80);
+    }
+    const dx = entity.wanderDir[0] * entity.speed;
+    const dy = entity.wanderDir[1] * entity.speed;
+    if (!moveEntityDir(entity, dx, dy)) {
+        entity.wanderDir = null; entity.wanderTimer = 0;
+    }
+}
+
+function addMessage(text, color, duration) {
+    state.messages.push({text, color: color || '#fff', timer: duration || 150, maxTimer: duration || 150});
+}
+
+function addParticles(x, y, color, count) {
+    for (let i = 0; i < count; i++) {
+        state.particles.push({
+            x, y, vx: (Math.random()-0.5)*3, vy: (Math.random()-0.5)*3,
+            life: 20 + Math.random()*20, color
+        });
+    }
+}
+
+// ═══════════════════════════════════════════════════════════════
+// SISTEMA DE PODERES
+// ═══════════════════════════════════════════════════════════════
+function usePowerUp() {
+    const pu = state.player.powerUp;
+    if (!pu) return;
+    state.player.powerUp = null;
+    state.powerUpsUsed++;
+    switch(pu) {
+        case 'emp':
+            state.robot.stunned = 240; // 4 seconds
+            addMessage('¡PULSO EMP ACTIVADO!', '#aa44ff', 120);
+            addParticles(state.robot.x, state.robot.y, '#aa44ff', 20);
+            playSFX('emp');
+            break;
+        case 'velocidad':
+            state.player.speedBoost = 480; // 8 seconds
+            addMessage('¡VELOCIDAD AUMENTADA!', '#ffdd00', 120);
+            playSFX('speed');
+            break;
+        case 'escudo':
+            state.player.shield = true;
+            addMessage('¡ESCUDO ACTIVADO!', '#00ddff', 120);
+            playSFX('shield');
+            break;
+        case 'trampa':
+            state.traps.push({x: state.player.x, y: state.player.y, active: true, life: 600});
+            addMessage('¡TRAMPA COLOCADA!', '#ff8800', 120);
+            playSFX('trap');
+            break;
+    }
+}
+
+// ═══════════════════════════════════════════════════════════════
+// ACTUALIZACIÓN DEL JUEGO
+// ═══════════════════════════════════════════════════════════════
+function updateGame() {
+    state.frameCount++;
+    state.timer++;
+
+    // Timer countdown
+    if (state.timer % 60 === 0 && state.timeLeft > 0) {
+        state.timeLeft--;
+    }
+
+    // Activation delay
+    if (!state.robotActivated) {
+        state.activationTimer--;
+        if (state.activationTimer <= 0) state.robotActivated = true;
+    }
+
+    // Robot speed ramp
+    const elapsed = SURVIVAL_TIME - state.timeLeft;
+    const progress = elapsed / SURVIVAL_TIME;
+    state.robot.speed = ROBOT_BASE_SPEED + (ROBOT_MAX_SPEED - ROBOT_BASE_SPEED) * progress;
+
+    // Warnings
+    if (state.timeLeft <= 60 && !state.warningFlags.w60) {
+        state.warningFlags.w60 = true;
+        addMessage('¡FALTA 1 MINUTO!', '#ffdd00', 150);
+        playSFX('warning');
+    }
+    if (state.timeLeft <= 30 && !state.warningFlags.w30) {
+        state.warningFlags.w30 = true;
+        addMessage('¡FALTAN 30 SEGUNDOS!', '#ff8800', 150);
+        playSFX('warning');
+    }
+    if (state.timeLeft <= 10 && !state.warningFlags.w10) {
+        state.warningFlags.w10 = true;
+        addMessage('¡¡10 SEGUNDOS!!', '#ff0000', 150);
+        playSFX('warning');
+    }
+
+    // WIN CONDITION
+    if (state.timeLeft <= 0 && state.player.alive) {
+        state.doorsOpen = true;
+        state.screen = 'victory';
+        stopMusic();
+        addMessage('¡¡LAS PUERTAS SE ABREN!!', '#00ff41', 300);
+        playSFX('doorOpen');
+        setTimeout(() => playSFX('victory'), 500);
+        state.npcsSurvived = state.npcs.filter(n => n.alive).length;
+        return;
+    }
+
+    updatePlayer();
+    if (state.robotActivated) updateRobot();
+    state.npcs.forEach(n => updateNPC(n));
+    updatePowerUps();
+    updateTraps();
+    checkCollisions();
+    updateParticles();
+    updateMessages();
+    updateProximity();
+
+    // Screen shake decay
+    if (state.shakeTimer > 0) {
+        state.shakeTimer--;
+        state.shakeX = (Math.random()-0.5) * state.shakeTimer * 0.5;
+        state.shakeY = (Math.random()-0.5) * state.shakeTimer * 0.5;
+    } else { state.shakeX = 0; state.shakeY = 0; }
+}
+
+function updatePlayer() {
+    const p = state.player;
+    if (!p.alive) return;
+    if (p.invincible > 0) p.invincible--;
+    if (p.speedBoost > 0) p.speedBoost--;
+
+    let dx = 0, dy = 0;
+    if (keys['ArrowLeft'] || keys['KeyA']) dx -= 1;
+    if (keys['ArrowRight'] || keys['KeyD']) dx += 1;
+    if (keys['ArrowUp'] || keys['KeyW']) dy -= 1;
+    if (keys['ArrowDown'] || keys['KeyS']) dy += 1;
+
+    if (dx !== 0 && dy !== 0) { dx *= 0.707; dy *= 0.707; }
+    const spd = p.speedBoost > 0 ? p.speed * 1.8 : p.speed;
+    moveEntityDir(p, dx * spd, dy * spd);
+}
+
+function updateRobot() {
+    const r = state.robot;
+    if (r.stunned > 0) { r.stunned--; r.moving = false; return; }
+    if (r.cooldown > 0) { r.cooldown--; wander(r); return; }
+
+    // Robot sound
+    if (state.frameCount % 20 === 0) playSFX('robotStep');
+
+    // Find target - bias toward player
+    let target = null;
+    let minDist = Infinity;
+
+    // Consider all alive entities
+    const candidates = [];
+    if (state.player.alive) candidates.push(state.player);
+    state.npcs.forEach(n => { if (n.alive) candidates.push(n); });
+
+    candidates.forEach(c => {
+        const d = distBetween(r, c);
+        if (d < minDist) { minDist = d; target = c; }
+    });
+
+    // Bias toward player 55% of the time if player is in range
+    if (state.player.alive && Math.random() < 0.55) {
+        const pd = distBetween(r, state.player);
+        if (pd < 160) { target = state.player; minDist = pd; }
+    }
+
+    const elapsed = SURVIVAL_TIME - state.timeLeft;
+    const prog = elapsed / SURVIVAL_TIME;
+    const detectionRange = 130 + prog * 40;
+
+    if (target && minDist < detectionRange) {
+        moveToward(r, target);
+    } else {
+        wander(r);
+    }
+}
+
+function updateNPC(npc) {
+    if (!npc.alive) return;
+    if (npc.invincible > 0) npc.invincible--;
+    if (npc.shoutTimer > 0) npc.shoutTimer--;
+
+    const distToRobot = distBetween(npc, state.robot);
+    const distToPlayer = distBetween(npc, state.player);
+
+    switch(npc.behavior) {
+        case 'runner':
+            if (distToRobot < 80) {
+                flee(npc, state.robot);
+                if (npc.shoutTimer <= 0 && Math.random() < 0.01) {
+                    npc.shoutText = '¡CORRE!'; npc.shoutTimer = 90;
+                }
+            } else {
+                wander(npc);
+            }
+            break;
+        case 'helper':
+            if (distToRobot < 90 && distToRobot > 35) {
+                // Distract robot by staying medium distance
+                if (Math.random() < 0.5) wander(npc);
+                else flee(npc, state.robot);
+                if (npc.shoutTimer <= 0 && Math.random() < 0.008) {
+                    npc.shoutText = '¡POR AQUÍ!'; npc.shoutTimer = 90;
+                }
+            } else if (distToRobot < 35) {
+                flee(npc, state.robot);
+            } else {
+                // Move toward player loosely
+                if (distToPlayer > 60) moveToward(npc, state.player);
+                else wander(npc);
+            }
+            break;
+        case 'fighter':
+            if (distToRobot < 50 && npc.stunCooldown <= 0) {
+                moveToward(npc, state.robot);
+                if (distToRobot < 18 && state.robot.stunned <= 0) {
+                    state.robot.stunned = 120; // 2 second stun
+                    npc.stunCooldown = 360; // 6 second cooldown
+                    addMessage(`¡${npc.name} ATURDE AL ROBOT!`, npc.color, 120);
+                    addParticles(state.robot.x, state.robot.y, '#ff8800', 10);
+                    if (npc.shoutTimer <= 0) { npc.shoutText = '¡TOMA!'; npc.shoutTimer = 60; }
+                }
+            } else if (distToRobot < 30) {
+                flee(npc, state.robot);
+            } else {
+                wander(npc);
+                if (npc.stunCooldown > 0) npc.stunCooldown--;
+            }
+            if (npc.stunCooldown > 0) npc.stunCooldown--;
+            break;
+        case 'panicker':
+            if (Math.random() < 0.06) npc.wanderDir = null;
+            wander(npc);
+            if (distToRobot < 50 && npc.shoutTimer <= 0 && Math.random() < 0.02) {
+                npc.shoutText = '¡AAAAH!'; npc.shoutTimer = 60;
+            }
+            break;
+    }
+}
+
+function updatePowerUps() {
+    state.powerUps.forEach(pu => {
+        if (!pu.active) {
+            pu.respawnTimer--;
+            if (pu.respawnTimer <= 0) {
+                pu.active = true;
+                pu.type = POWERUP_TYPES[Math.floor(Math.random() * POWERUP_TYPES.length)];
+            }
+            return;
+        }
+        // Check pickup by player
+        const dx = state.player.x - pu.x, dy = state.player.y - pu.y;
+        if (Math.abs(dx) < 10 && Math.abs(dy) < 10 && state.player.alive && !state.player.powerUp) {
+            state.player.powerUp = pu.type;
+            pu.active = false;
+            pu.respawnTimer = 900 + Math.floor(Math.random() * 300); // 15-20 sec
+            addMessage('PODER: ' + POWERUP_NAMES[pu.type], POWERUP_COLORS[pu.type], 90);
+            playSFX('pickup');
+        }
+    });
+}
+
+function updateTraps() {
+    state.traps.forEach((trap, i) => {
+        if (!trap.active) return;
+        trap.life--;
+        if (trap.life <= 0) { trap.active = false; return; }
+        const dx = state.robot.x - trap.x, dy = state.robot.y - trap.y;
+        if (Math.abs(dx) < 12 && Math.abs(dy) < 12 && state.robot.stunned <= 0) {
+            state.robot.stunned = 180;
+            trap.active = false;
+            addMessage('¡EL ROBOT CAYÓ EN LA TRAMPA!', '#ff8800', 120);
+            addParticles(trap.x, trap.y, '#ff8800', 15);
+            playSFX('emp');
+        }
+    });
+}
+
+function checkCollisions() {
+    const r = state.robot;
+    if (r.stunned > 0 || r.cooldown > 0) return;
+
+    // Robot vs Player
+    const p = state.player;
+    if (p.alive && p.invincible <= 0) {
+        const d = distBetween(r, p);
+        if (d < 12) {
+            if (p.shield) {
+                p.shield = false;
+                p.invincible = 60;
+                r.cooldown = 120;
+                addMessage('¡ESCUDO BLOQUEÓ EL GOLPE!', '#00ddff', 120);
+                addParticles(p.x, p.y, '#00ddff', 12);
+                playSFX('shieldBlock');
+            } else {
+                p.health--;
+                p.invincible = 90;
+                r.cooldown = 180;
+                state.shakeTimer = 15;
+                addParticles(p.x, p.y, '#ff0000', 8);
+                playSFX('hit');
+                if (p.health <= 0) {
+                    p.alive = false;
+                    state.screen = 'gameover';
+                    stopMusic();
+                    addMessage('¡HAS SIDO ELIMINADO!', '#ff0000', 300);
+                    setTimeout(() => playSFX('gameOver'), 300);
+                } else {
+                    addMessage('¡CUIDADO! TE HA GOLPEADO', '#ff4444', 90);
+                }
+                // Knockback
+                const kd = d > 0.5 ? d : 1;
+                const kx = (p.x - r.x) / kd * 8;
+                const ky = (p.y - r.y) / kd * 8;
+                if (canMoveTo(p, p.x + kx, p.y + ky)) { p.x += kx; p.y += ky; }
+            }
+        }
+    }
+
+    // Robot vs NPCs
+    state.npcs.forEach(npc => {
+        if (!npc.alive || npc.invincible > 0) return;
+        const d = distBetween(r, npc);
+        if (d < 12) {
+            npc.health--;
+            npc.invincible = 60;
+            r.cooldown = 90;
+            addParticles(npc.x, npc.y, npc.color, 8);
+            if (npc.health <= 0) {
+                npc.alive = false;
+                addMessage(`¡${npc.name} HA CAÍDO!`, '#ff4444', 150);
+                playSFX('npcDeath');
+                state.npcsSurvived = state.npcs.filter(n => n.alive).length;
+            } else {
+                // Knockback
+                const kd = d > 0.5 ? d : 1;
+                const kx = (npc.x - r.x) / kd * 6;
+                const ky = (npc.y - r.y) / kd * 6;
+                if (canMoveTo(npc, npc.x + kx, npc.y + ky)) { npc.x += kx; npc.y += ky; }
+            }
+        }
+    });
+}
+
+function updateParticles() {
+    state.particles = state.particles.filter(p => {
+        p.x += p.vx; p.y += p.vy;
+        p.vx *= 0.95; p.vy *= 0.95;
+        p.life--;
+        return p.life > 0;
+    });
+}
+
+function updateMessages() {
+    state.messages = state.messages.filter(m => {
+        m.timer--;
+        return m.timer > 0;
+    });
+}
+
+// ═══════════════════════════════════════════════════════════════
+// DIBUJADO DE SPRITES
+// ═══════════════════════════════════════════════════════════════
+function drawPlayerSprite(c, x, y, frame, inv, shield, speedBoost) {
+    if (inv > 0 && Math.floor(inv / 4) % 2 === 0) return; // flash
+
+    const f = Math.floor(x); const g = Math.floor(y);
+
+    // Shield glow
+    if (shield) {
+        c.fillStyle = 'rgba(0,221,255,0.2)';
+        c.beginPath(); c.arc(f, g, 9, 0, Math.PI*2); c.fill();
+    }
+    // Speed trail
+    if (speedBoost > 0) {
+        c.fillStyle = 'rgba(255,221,0,0.15)';
+        c.fillRect(f-7, g-7, 14, 14);
+    }
+
+    // Body (FBI suit dark blue)
+    c.fillStyle = '#1a1a4e';
+    c.fillRect(f-4, g-2, 8, 7);
+    // Head
+    c.fillStyle = '#d4a574';
+    c.fillRect(f-3, g-7, 6, 5);
+    // Hair
+    c.fillStyle = '#1a0a05';
+    c.fillRect(f-3, g-8, 6, 2);
+    // Visor (cyberpunk)
+    c.fillStyle = '#00ff41';
+    c.fillRect(f-3, g-5, 6, 2);
+    // Eye slit
+    c.fillStyle = '#00aa20';
+    c.fillRect(f-2, g-5, 2, 1);
+    c.fillRect(f+1, g-5, 2, 1);
+    // Badge
+    c.fillStyle = '#ffd700';
+    c.fillRect(f-4, g-1, 2, 2);
+    // Legs (animated)
+    c.fillStyle = '#0a0a2e';
+    const legOff = frame % 2 === 0 ? 1 : -1;
+    c.fillRect(f-3, g+5, 3, 3 + legOff);
+    c.fillRect(f+1, g+5, 3, 3 - legOff);
+    // Boots
+    c.fillStyle = '#222';
+    c.fillRect(f-3, g+7+Math.max(0,legOff), 3, 1);
+    c.fillRect(f+1, g+7-Math.min(0,legOff), 3, 1);
+    // Shield circle
+    if (shield) {
+        c.strokeStyle = '#00ddff';
+        c.lineWidth = 1;
+        c.beginPath(); c.arc(f, g, 9, 0, Math.PI*2); c.stroke();
+    }
+}
+
+function drawRobotSprite(c, x, y, frame, stunned) {
+    const f = Math.floor(x); const g = Math.floor(y);
+    // Stun effect
+    if (stunned > 0) {
+        c.fillStyle = `rgba(170,68,255,${0.2 + Math.sin(stunned*0.3)*0.15})`;
+        c.fillRect(f-9, g-9, 18, 18);
+        // Stars
+        for (let i = 0; i < 3; i++) {
+            const angle = (stunned * 0.1 + i * 2.1);
+            c.fillStyle = '#ffff00';
+            c.fillRect(f + Math.cos(angle)*8, g - 10 + Math.sin(angle)*3, 2, 2);
+        }
+    }
+    // Body (metallic)
+    c.fillStyle = stunned > 0 ? '#3a3a5e' : '#4a4a6e';
+    c.fillRect(f-6, g-3, 12, 9);
+    // Chest plate
+    c.fillStyle = '#353550';
+    c.fillRect(f-4, g-1, 8, 5);
+    // Head
+    c.fillStyle = '#5a5a7e';
+    c.fillRect(f-5, g-9, 10, 7);
+    // Antenna
+    c.fillStyle = '#ff4444';
+    c.fillRect(f-1, g-11, 2, 3);
+    // Eyes (red, glowing)
+    const eyeGlow = stunned > 0 ? '#664444' : (Math.floor(frame*0.3)%2===0 ? '#ff0000' : '#ff4444');
+    c.fillStyle = eyeGlow;
+    c.fillRect(f-4, g-7, 3, 2);
+    c.fillRect(f+1, g-7, 3, 2);
+    // Arms
+    c.fillStyle = '#3a3a5e';
+    c.fillRect(f-8, g-2, 3, 7);
+    c.fillRect(f+5, g-2, 3, 7);
+    // Claws
+    c.fillStyle = stunned > 0 ? '#664444' : '#ff4444';
+    c.fillRect(f-8, g+5, 3, 2);
+    c.fillRect(f+5, g+5, 3, 2);
+    // Legs
+    c.fillStyle = '#3a3a5e';
+    const legOff = frame % 2 === 0 ? 1 : 0;
+    c.fillRect(f-4, g+6, 3, 3+legOff);
+    c.fillRect(f+1, g+6, 3, 3-legOff);
+    // Danger glow when moving fast
+    if (state.robot.speed > 1.0 && stunned <= 0) {
+        c.fillStyle = `rgba(233,69,96,${0.1 + Math.sin(frame*0.2)*0.05})`;
+        c.beginPath(); c.arc(f, g, 12, 0, Math.PI*2); c.fill();
+    }
+}
+
+function drawNPCSprite(c, x, y, frame, color, alive, inv) {
+    if (!alive) return;
+    if (inv > 0 && Math.floor(inv / 4) % 2 === 0) return;
+    const f = Math.floor(x); const g = Math.floor(y);
+    // Body
+    c.fillStyle = color;
+    c.fillRect(f-3, g-2, 6, 6);
+    // Head
+    c.fillStyle = '#d4a574';
+    c.fillRect(f-3, g-7, 6, 5);
+    // Hair (varies)
+    c.fillStyle = '#2a1a0a';
+    c.fillRect(f-3, g-8, 6, 2);
+    // Eyes
+    c.fillStyle = '#111';
+    c.fillRect(f-2, g-5, 1, 1);
+    c.fillRect(f+1, g-5, 1, 1);
+    // Legs
+    c.fillStyle = '#1a1a3e';
+    const lo = frame % 2 === 0 ? 1 : -1;
+    c.fillRect(f-2, g+4, 2, 3+lo);
+    c.fillRect(f+1, g+4, 2, 3-lo);
+}
+
+function drawPowerUpSprite(c, x, y, type, frame) {
+    const f = Math.floor(x); const g = Math.floor(y);
+    const col = POWERUP_COLORS[type];
+    const glowSize = 7 + Math.sin(frame * 0.1) * 2;
+    // Glow
+    c.fillStyle = col + '33';
+    c.beginPath(); c.arc(f, g, glowSize, 0, Math.PI*2); c.fill();
+    // Icon background
+    c.fillStyle = col;
+    c.fillRect(f-4, g-4, 8, 8);
+    // Icon detail
+    c.fillStyle = '#fff';
+    switch(type) {
+        case 'emp':
+            c.fillRect(f-1, g-3, 2, 6); // lightning bolt
+            c.fillRect(f-2, g-1, 4, 2);
+            break;
+        case 'velocidad':
+            c.fillRect(f-3, g-1, 3, 2); // arrows
+            c.fillRect(f+1, g-1, 3, 2);
+            c.fillRect(f-1, g-3, 2, 2);
+            break;
+        case 'escudo':
+            c.fillRect(f-2, g-3, 4, 5); // shield
+            c.fillRect(f-3, g-2, 6, 3);
+            break;
+        case 'trampa':
+            c.fillRect(f-2, g-2, 4, 4); // gear
+            c.fillRect(f-3, g-1, 6, 2);
+            c.fillRect(f-1, g-3, 2, 6);
+            break;
+    }
+}
+
+// ═══════════════════════════════════════════════════════════════
+// RENDERIZADO DEL MAPA
+// ═══════════════════════════════════════════════════════════════
+function drawMap(c) {
+    for (let ty = 0; ty < MAP_H; ty++) {
+        for (let tx = 0; tx < MAP_W; tx++) {
+            const tile = MAP[ty][tx];
+            const x = tx * TILE, y = ty * TILE;
+            const seed = ((tx * 7 + ty * 13) * 31337) & 0xFF;
+
+            if (tile === 0) {
+                // Floor
+                const shade = 20 + (seed % 8);
+                c.fillStyle = `rgb(${shade},${shade},${shade+15})`;
+                c.fillRect(x, y, TILE, TILE);
+                // Grid line
+                c.fillStyle = 'rgba(40,40,70,0.3)';
+                c.fillRect(x, y, 1, TILE);
+                c.fillRect(x, y, TILE, 1);
+                // Occasional floor detail
+                if (seed % 17 === 0) {
+                    c.fillStyle = 'rgba(60,60,90,0.3)';
+                    c.fillRect(x+3, y+3, 4, 1);
+                }
+            } else if (tile === 1) {
+                // Wall
+                c.fillStyle = '#202045';
+                c.fillRect(x, y, TILE, TILE);
+                // Top edge highlight
+                c.fillStyle = '#303065';
+                c.fillRect(x, y, TILE, 2);
+                // Neon accent
+                if (seed % 23 === 0) {
+                    c.fillStyle = '#0066cc44';
+                    c.fillRect(x+2, y+6, TILE-4, 2);
+                }
+                if (seed % 31 === 0) {
+                    c.fillStyle = (state.frameCount % 60 < 30) ? '#ff004422' : '#ff004411';
+                    c.fillRect(x+6, y+4, 4, 4);
+                }
+                // Side edge
+                c.fillStyle = '#181838';
+                c.fillRect(x+TILE-1, y, 1, TILE);
+                c.fillRect(x, y+TILE-1, TILE, 1);
+            } else if (tile === 2) {
+                // Exit door
+                if (state.doorsOpen) {
+                    c.fillStyle = '#003300';
+                    c.fillRect(x, y, TILE, TILE);
+                    c.fillStyle = '#00ff41';
+                    c.fillRect(x+1, y+1, TILE-2, TILE-2);
+                    c.fillStyle = '#003300';
+                    c.fillRect(x+3, y+3, TILE-6, TILE-6);
+                    c.fillStyle = '#00ff41';
+                    c.fillRect(x+6, y+5, 4, 6);
+                } else {
+                    c.fillStyle = '#330000';
+                    c.fillRect(x, y, TILE, TILE);
+                    c.fillStyle = (state.frameCount % 40 < 20) ? '#ff0000' : '#aa0000';
+                    c.fillRect(x+1, y+1, TILE-2, TILE-2);
+                    c.fillStyle = '#330000';
+                    c.fillRect(x+3, y+3, TILE-6, TILE-6);
+                    // Lock icon
+                    c.fillStyle = '#ff4444';
+                    c.fillRect(x+6, y+5, 4, 4);
+                    c.fillRect(x+7, y+3, 2, 3);
+                }
+            } else if (tile === 5) {
+                // Machinery
+                c.fillStyle = '#1a1a30';
+                c.fillRect(x, y, TILE, TILE);
+                c.fillStyle = '#2a2a50';
+                c.fillRect(x+2, y+2, TILE-4, TILE-4);
+                c.fillStyle = '#3a3a60';
+                c.fillRect(x+4, y+4, TILE-8, TILE-8);
+                // Blinking light
+                const blink = ((state.frameCount + seed) % 80) < 10;
+                c.fillStyle = blink ? '#00ff88' : '#004422';
+                c.fillRect(x+7, y+2, 2, 2);
+                // Edge
+                c.fillStyle = '#404080';
+                c.fillRect(x, y, TILE, 1);
+                c.fillRect(x, y, 1, TILE);
+            }
+        }
+    }
+}
+
+// ═══════════════════════════════════════════════════════════════
+// RENDERIZADO COMPLETO
+// ═══════════════════════════════════════════════════════════════
+function render() {
+    ctx.fillStyle = '#0a0a18';
+    ctx.fillRect(0, 0, GAME_W, GAME_H);
+
+    if (state.screen === 'title') {
+        drawTitleScreen(ctx);
+    } else if (state.screen === 'playing') {
+        ctx.save();
+        ctx.translate(Math.floor(state.shakeX), Math.floor(state.shakeY));
+        drawMap(ctx);
+        drawTraps(ctx);
+        drawPowerUpsOnMap(ctx);
+        drawEntities(ctx);
+        drawParticles(ctx);
+        ctx.restore();
+        drawHUD(ctx);
+        drawMessages(ctx);
+    } else if (state.screen === 'gameover') {
+        ctx.save();
+        ctx.translate(Math.floor(state.shakeX), Math.floor(state.shakeY));
+        drawMap(ctx);
+        drawEntities(ctx);
+        ctx.restore();
+        drawGameOverScreen(ctx);
+    } else if (state.screen === 'victory') {
+        drawMap(ctx);
+        drawEntities(ctx);
+        drawVictoryScreen(ctx);
+    }
+
+    // Scanlines
+    drawScanlines(ctx);
+
+    // Scale to display
+    displayCtx.clearRect(0, 0, displayCanvas.width, displayCanvas.height);
+    displayCtx.drawImage(buffer, 0, 0, displayCanvas.width, displayCanvas.height);
+}
+
+function drawEntities(c) {
+    // Draw dead NPCs first (as X marks)
+    state.npcs.forEach(npc => {
+        if (!npc.alive) {
+            c.fillStyle = '#44000088';
+            c.fillRect(npc.x-4, npc.y-4, 8, 8);
+            c.fillStyle = '#ff444488';
+            c.fillRect(npc.x-2, npc.y-2, 1, 4);
+            c.fillRect(npc.x+1, npc.y-2, 1, 4);
+        }
+    });
+    // NPCs
+    state.npcs.forEach(npc => {
+        if (!npc.alive) return;
+        drawNPCSprite(c, npc.x, npc.y, npc.frame, npc.color, npc.alive, npc.invincible);
+        // Name tag
+        c.fillStyle = npc.color;
+        c.font = '3px monospace';
+        c.textAlign = 'center';
+        c.fillText(npc.name.split(' ')[1] || npc.name, npc.x, npc.y - 10);
+        // Shout bubble
+        if (npc.shoutTimer > 0) {
+            c.fillStyle = '#fff';
+            c.font = '4px monospace';
+            c.fillText(npc.shoutText, npc.x, npc.y - 14);
+        }
+    });
+    // Player
+    if (state.player.alive) {
+        drawPlayerSprite(c, state.player.x, state.player.y, state.player.frame,
+            state.player.invincible, state.player.shield, state.player.speedBoost);
+    }
+    // Robot
+    drawRobotSprite(c, state.robot.x, state.robot.y, state.frameCount, state.robot.stunned);
+}
+
+function drawPowerUpsOnMap(c) {
+    state.powerUps.forEach(pu => {
+        if (pu.active) {
+            drawPowerUpSprite(c, pu.x, pu.y, pu.type, state.frameCount);
+        }
+    });
+}
+
+function drawTraps(c) {
+    state.traps.forEach(trap => {
+        if (!trap.active) return;
+        const pulse = Math.sin(state.frameCount * 0.15) * 0.3 + 0.5;
+        c.fillStyle = `rgba(255,136,0,${pulse * 0.4})`;
+        c.beginPath(); c.arc(trap.x, trap.y, 6, 0, Math.PI*2); c.fill();
+        c.fillStyle = '#ff8800';
+        c.fillRect(trap.x-2, trap.y-2, 4, 4);
+        c.fillStyle = '#ffaa44';
+        c.fillRect(trap.x-1, trap.y-1, 2, 2);
+    });
+}
+
+function drawParticles(c) {
+    state.particles.forEach(p => {
+        const alpha = p.life / 40;
+        c.fillStyle = p.color + Math.floor(alpha * 255).toString(16).padStart(2, '0');
+        c.fillRect(Math.floor(p.x), Math.floor(p.y), 2, 2);
+    });
+}
+
+function drawHUD(c) {
+    // Background
+    c.fillStyle = '#0a0a14';
+    c.fillRect(0, HUD_Y, GAME_W, GAME_H - HUD_Y);
+    c.fillStyle = '#00ff4144';
+    c.fillRect(0, HUD_Y, GAME_W, 1);
+
+    // Health hearts
+    for (let i = 0; i < state.player.maxHealth; i++) {
+        const hx = 8 + i * 14;
+        const hy = HUD_Y + 8;
+        if (i < state.player.health) {
+            c.fillStyle = '#ff2244';
+            // Heart shape
+            c.fillRect(hx, hy+1, 2, 4);
+            c.fillRect(hx+5, hy+1, 2, 4);
+            c.fillRect(hx+1, hy, 5, 3);
+            c.fillRect(hx+2, hy+3, 3, 2);
+            c.fillRect(hx+3, hy+5, 1, 1);
+        } else {
+            c.fillStyle = '#331122';
+            c.fillRect(hx, hy+1, 2, 4);
+            c.fillRect(hx+5, hy+1, 2, 4);
+            c.fillRect(hx+1, hy, 5, 3);
+            c.fillRect(hx+2, hy+3, 3, 2);
+        }
+    }
+
+    // Timer (centered, big)
+    const min = Math.floor(state.timeLeft / 60);
+    const sec = state.timeLeft % 60;
+    const timeStr = `${min}:${sec.toString().padStart(2, '0')}`;
+    c.textAlign = 'center';
+    const timerColor = state.timeLeft <= 10 ? '#ff0000' : state.timeLeft <= 30 ? '#ff8800' : state.timeLeft <= 60 ? '#ffdd00' : '#00ff41';
+    c.fillStyle = timerColor;
+    c.font = '14px "Press Start 2P", monospace';
+    c.fillText(timeStr, GAME_W / 2, HUD_Y + 20);
+
+    // Timer label
+    c.fillStyle = '#666';
+    c.font = '5px "Press Start 2P", monospace';
+    c.fillText('TIEMPO RESTANTE', GAME_W / 2, HUD_Y + 28);
+
+    // Power-up indicator (right side)
+    if (state.player.powerUp) {
+        const pu = state.player.powerUp;
+        const px = GAME_W - 50;
+        const py = HUD_Y + 8;
+        c.fillStyle = POWERUP_COLORS[pu] + '44';
+        c.fillRect(px - 8, py - 4, 50, 20);
+        c.fillStyle = POWERUP_COLORS[pu];
+        c.font = '4px "Press Start 2P", monospace';
+        c.textAlign = 'right';
+        c.fillText(POWERUP_NAMES[pu], GAME_W - 8, py + 4);
+        c.fillStyle = '#aaa';
+        c.font = '3px monospace';
+        c.fillText('[ESPACIO]', GAME_W - 8, py + 12);
+    }
+
+    // NPCs alive count
+    c.fillStyle = '#00aaff';
+    c.font = '4px "Press Start 2P", monospace';
+    c.textAlign = 'left';
+    const alive = state.npcs.filter(n => n.alive).length;
+    c.fillText(`EQUIPO:${alive}/5`, 8, HUD_Y + 28);
+}
+
+function drawMessages(c) {
+    let yOff = 40;
+    state.messages.forEach(m => {
+        const alpha = Math.min(1, m.timer / 30);
+        c.globalAlpha = alpha;
+        c.fillStyle = '#000000';
+        c.font = '6px "Press Start 2P", monospace';
+        c.textAlign = 'center';
+        c.fillText(m.text, GAME_W/2 + 1, yOff + 1);
+        c.fillStyle = m.color;
+        c.fillText(m.text, GAME_W/2, yOff);
+        yOff += 12;
+    });
+    c.globalAlpha = 1;
+}
+
+function drawScanlines(c) {
+    c.fillStyle = 'rgba(0,0,0,0.08)';
+    for (let y = 0; y < GAME_H; y += 2) {
+        c.fillRect(0, y, GAME_W, 1);
+    }
+    // Vignette
+    const grad = c.createRadialGradient(GAME_W/2, GAME_H/2, GAME_W*0.35, GAME_W/2, GAME_H/2, GAME_W*0.75);
+    grad.addColorStop(0, 'rgba(0,0,0,0)');
+    grad.addColorStop(1, 'rgba(0,0,0,0.4)');
+    c.fillStyle = grad;
+    c.fillRect(0, 0, GAME_W, GAME_H);
+}
+
+// ═══════════════════════════════════════════════════════════════
+// PANTALLAS ESPECIALES
+// ═══════════════════════════════════════════════════════════════
+function drawTitleScreen(c) {
+    // Dark background with subtle grid
+    c.fillStyle = '#0a0a1a';
+    c.fillRect(0, 0, GAME_W, GAME_H);
+    for (let y = 0; y < GAME_H; y += 16) {
+        for (let x = 0; x < GAME_W; x += 16) {
+            c.fillStyle = 'rgba(20,20,50,0.5)';
+            c.fillRect(x, y, 1, 16);
+            c.fillRect(x, y, 16, 1);
+        }
+    }
+
+    // Animated lines
+    const t = state.frameCount || 0;
+    for (let i = 0; i < 5; i++) {
+        const ly = (t * 0.5 + i * 60) % GAME_H;
+        c.fillStyle = 'rgba(0,100,255,0.06)';
+        c.fillRect(0, ly, GAME_W, 2);
+    }
+
+    // Title
+    c.textAlign = 'center';
+    c.fillStyle = '#e94560';
+    c.font = '14px "Press Start 2P", monospace';
+    c.fillText('ESCAPE DE', GAME_W/2, 55);
+    c.fillStyle = '#00ff41';
+    c.font = '16px "Press Start 2P", monospace';
+    c.fillText('LA FÁBRICA', GAME_W/2, 80);
+
+    // Subtitle
+    c.fillStyle = '#00aaff';
+    c.font = '6px "Press Start 2P", monospace';
+    c.fillText('MISIÓN DE SUPERVIVENCIA FBI', GAME_W/2, 100);
+
+    // Robot sprite preview
+    drawRobotSprite(c, GAME_W/2, 140, t, 0);
+
+    // Blinking text
+    if (Math.floor(t / 30) % 2 === 0) {
+        c.fillStyle = '#fff';
+        c.font = '6px "Press Start 2P", monospace';
+        c.fillText('PRESIONA ENTER', GAME_W/2, 185);
+    }
+
+    // Instructions
+    c.fillStyle = '#666';
+    c.font = '5px "Press Start 2P", monospace';
+    c.fillText('FLECHAS/WASD: MOVER', GAME_W/2, 210);
+    c.fillText('ESPACIO: USAR PODER', GAME_W/2, 222);
+
+    // Story
+    c.fillStyle = '#8888aa';
+    c.font = '4px monospace';
+    const story = [
+        'El FBI te envía a investigar la Fábrica CyberDyne.',
+        'Un robot con programación fallida se ha vuelto loco.',
+        'Sobrevive 3:40 hasta que las puertas se abran.',
+        'Recoge poderes. Protege a tu equipo. ¡SOBREVIVE!'
+    ];
+    story.forEach((line, i) => {
+        c.fillText(line, GAME_W/2, 248 + i * 10);
+    });
+
+    // Version
+    c.fillStyle = '#333';
+    c.font = '4px monospace';
+    c.fillText('v1.0 - CyberDyne Games 2026', GAME_W/2, 310);
+}
+
+function drawGameOverScreen(c) {
+    c.fillStyle = 'rgba(10,0,0,0.85)';
+    c.fillRect(0, 0, GAME_W, GAME_H);
+
+    c.textAlign = 'center';
+    c.fillStyle = '#ff0000';
+    c.font = '16px "Press Start 2P", monospace';
+    c.fillText('MISIÓN', GAME_W/2, 90);
+    c.fillText('FALLIDA', GAME_W/2, 115);
+
+    // Skull icon
+    c.fillStyle = '#ff4444';
+    c.fillRect(GAME_W/2-6, 130, 12, 10);
+    c.fillRect(GAME_W/2-4, 128, 8, 2);
+    c.fillStyle = '#0a0000';
+    c.fillRect(GAME_W/2-4, 133, 3, 3);
+    c.fillRect(GAME_W/2+1, 133, 3, 3);
+    c.fillRect(GAME_W/2-2, 137, 4, 2);
+
+    const survived = SURVIVAL_TIME - state.timeLeft;
+    const min = Math.floor(survived / 60);
+    const sec = survived % 60;
+    c.fillStyle = '#aa4444';
+    c.font = '6px "Press Start 2P", monospace';
+    c.fillText(`SOBREVIVISTE ${min}:${sec.toString().padStart(2,'0')}`, GAME_W/2, 165);
+
+    c.fillStyle = '#888';
+    c.font = '5px "Press Start 2P", monospace';
+    c.fillText(`EQUIPO SOBREVIVIENTE: ${state.npcs.filter(n=>n.alive).length}/5`, GAME_W/2, 185);
+    c.fillText(`PODERES USADOS: ${state.powerUpsUsed}`, GAME_W/2, 200);
+
+    if (Math.floor((state.frameCount||0) / 30) % 2 === 0) {
+        c.fillStyle = '#fff';
+        c.font = '6px "Press Start 2P", monospace';
+        c.fillText('PRESIONA ENTER', GAME_W/2, 240);
+    }
+}
+
+function drawVictoryScreen(c) {
+    c.fillStyle = 'rgba(0,10,0,0.85)';
+    c.fillRect(0, 0, GAME_W, GAME_H);
+
+    c.textAlign = 'center';
+    const t = state.frameCount || 0;
+
+    // Rainbow-ish cycling title
+    const hue = (t * 3) % 360;
+    c.fillStyle = `hsl(${hue}, 100%, 60%)`;
+    c.font = '12px "Press Start 2P", monospace';
+    c.fillText('¡¡MISIÓN', GAME_W/2, 70);
+    c.fillText('COMPLETADA!!', GAME_W/2, 90);
+
+    // Trophy
+    c.fillStyle = '#ffd700';
+    c.fillRect(GAME_W/2-8, 105, 16, 12);
+    c.fillRect(GAME_W/2-12, 107, 24, 6);
+    c.fillRect(GAME_W/2-4, 117, 8, 4);
+    c.fillRect(GAME_W/2-6, 121, 12, 2);
+
+    c.fillStyle = '#00ff41';
+    c.font = '7px "Press Start 2P", monospace';
+    c.fillText('¡HAS SOBREVIVIDO!', GAME_W/2, 145);
+
+    c.fillStyle = '#00aaff';
+    c.font = '5px "Press Start 2P", monospace';
+    c.fillText('LAS PUERTAS SE HAN ABIERTO', GAME_W/2, 165);
+    c.fillText('TU EQUIPO ESCAPA DE LA FÁBRICA', GAME_W/2, 178);
+
+    c.fillStyle = '#aaa';
+    c.fillText(`EQUIPO SOBREVIVIENTE: ${state.npcsSurvived}/5`, GAME_W/2, 200);
+    c.fillText(`PODERES USADOS: ${state.powerUpsUsed}`, GAME_W/2, 215);
+
+    // Rating
+    let rating = 'C';
+    if (state.npcsSurvived >= 4 && state.player.health >= 2) rating = 'S';
+    else if (state.npcsSurvived >= 3) rating = 'A';
+    else if (state.npcsSurvived >= 2) rating = 'B';
+    c.fillStyle = rating === 'S' ? '#ffd700' : rating === 'A' ? '#00ff41' : rating === 'B' ? '#00aaff' : '#aaa';
+    c.font = '12px "Press Start 2P", monospace';
+    c.fillText(`RANGO: ${rating}`, GAME_W/2, 245);
+
+    if (Math.floor(t / 30) % 2 === 0) {
+        c.fillStyle = '#fff';
+        c.font = '6px "Press Start 2P", monospace';
+        c.fillText('PRESIONA ENTER', GAME_W/2, 280);
+    }
+}
+
+// ═══════════════════════════════════════════════════════════════
+// BUCLE PRINCIPAL
+// ═══════════════════════════════════════════════════════════════
+let lastTime = 0;
+const FRAME_TIME = 1000 / 60;
+let accumulator = 0;
+
+function gameLoop(timestamp) {
+    if (!lastTime) lastTime = timestamp;
+    const delta = timestamp - lastTime;
+    lastTime = timestamp;
+    accumulator += delta;
+
+    while (accumulator >= FRAME_TIME) {
+        if (state.screen === 'playing') {
+            updateGame();
+        }
+        state.frameCount = (state.frameCount || 0) + 1;
+        accumulator -= FRAME_TIME;
+    }
+
+    render();
+    requestAnimationFrame(gameLoop);
+}
+
+// ═══════════════════════════════════════════════════════════════
+// INICIO
+// ═══════════════════════════════════════════════════════════════
+resetGame();
+requestAnimationFrame(gameLoop);
+
+</script>
+</body>
+</html>
