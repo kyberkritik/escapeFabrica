@@ -90,10 +90,11 @@ function initAudio() {
 }
 
 function noteFreq(note) {
-    const notes = {C:0,'C#':1,D:2,'D#':3,E:4,F:5,'F#':6,G:7,'G#':8,A:9,'A#':10,B:11};
-    const match = note.match(/^([A-G]#?)(\d)$/);
+    const notes = {C:0,'C#':1,Db:1,D:2,'D#':3,Eb:3,E:4,F:5,'F#':6,Gb:6,G:7,'G#':8,Ab:8,A:9,'A#':10,Bb:10,B:11};
+    const match = note.match(/^([A-G][b#]?)(\d)$/);
     if (!match) return 0;
     const semitone = notes[match[1]];
+    if (semitone === undefined) return 0;
     const octave = parseInt(match[2]);
     return 440 * Math.pow(2, (semitone - 9) / 12 + (octave - 4));
 }
@@ -201,10 +202,32 @@ function playSFX(name) {
     }
 }
 
-// Música chiptune oscura cyberpunk
-const bassPattern =  ['A2','A2','0','A2','C3','C3','0','C3','D3','D3','0','D3','E3','E3','D3','C3'];
-const melodyPattern = ['A4','0','E4','0','C4','D4','E4','0','F4','0','E4','0','D4','C4','B3','0'];
-const arpPattern =   ['A3','C4','E4','A4','E4','C4','A3','C4','D4','F4','A4','F4','D4','A3','E4','C4'];
+// Música chiptune heroica estilo Street Fighter
+// Patrón de 32 beats para más variación
+const bassPattern = [
+    'Ab2','0','Ab2','Ab2','0','Ab2','Ab2','0',
+    'Db3','0','Db3','Db3','0','Db3','Db3','0',
+    'B2','0','B2','B2','0','B2','B2','0',
+    'E3','0','E3','E3','0','Db3','B2','Ab2'
+];
+const melodyPattern = [
+    'Ab4','0','Db5','Eb5','0','Db5','Ab4','0',
+    'Db5','0','Eb5','E5','0','Eb5','Db5','0',
+    'B4','0','E5','Gb5','0','E5','Db5','B4',
+    'E5','0','Gb5','Ab5','0','E5','Eb5','Db5'
+];
+const harmonyPattern = [
+    'Eb4','0','Ab4','0','Eb4','0','Ab4','0',
+    'Ab4','0','Db5','0','Ab4','0','Db5','0',
+    'Gb4','0','B4','0','Gb4','0','B4','0',
+    'B4','0','E5','0','B4','0','Ab4','0'
+];
+const arpPattern = [
+    'Ab3','Eb4','Ab4','Eb4','Ab3','Eb4','Ab4','Eb4',
+    'Db4','Ab4','Db5','Ab4','Db4','Ab4','Db5','Ab4',
+    'B3','Gb4','B4','Gb4','B3','Gb4','B4','Gb4',
+    'E4','B4','E5','B4','E4','B4','Db5','Ab4'
+];
 let beatIndex = 0;
 
 function startMusic() {
@@ -216,23 +239,27 @@ function startMusic() {
 
 function doMusicBeat() {
     if (!musicPlaying) return;
-    const tempo = state.timeLeft < 30 ? 195 : state.timeLeft < 60 ? 168 : 140;
+    const tempo = state.timeLeft < 30 ? 200 : state.timeLeft < 60 ? 180 : 160;
     const beatMs = 60000 / tempo;
     const beatSec = beatMs / 1000;
     const bi = beatIndex % bassPattern.length;
 
-    // Bass
+    // Bass (driving square wave)
     const bassNote = bassPattern[bi];
-    if (bassNote !== '0') playTone(noteFreq(bassNote), 'square', 0.09, beatSec * 0.7);
-    // Melody
+    if (bassNote !== '0') playTone(noteFreq(bassNote), 'square', 0.10, beatSec * 0.8);
+    // Lead melody (triangle, heroic)
     const melNote = melodyPattern[bi];
-    if (melNote !== '0') playTone(noteFreq(melNote), 'triangle', 0.055, beatSec * 0.5);
-    // Arp (quiet background texture)
+    if (melNote !== '0') playTone(noteFreq(melNote), 'triangle', 0.07, beatSec * 0.6);
+    // Harmony (square, quieter, adds fullness)
+    const harmNote = harmonyPattern[bi];
+    if (harmNote !== '0') playTone(noteFreq(harmNote), 'square', 0.03, beatSec * 0.4, 5);
+    // Arp (fast background texture)
     const arpNote = arpPattern[bi];
-    if (arpNote !== '0') playTone(noteFreq(arpNote), 'square', 0.025, beatSec * 0.3, 7);
-    // Percussion
-    if (bi % 4 === 0) playNoise(0.06, 0.08);
-    if (bi % 2 === 0) playNoise(0.025, 0.03);
+    if (arpNote !== '0') playTone(noteFreq(arpNote), 'square', 0.02, beatSec * 0.25, 10);
+    // Percussion - driving beat
+    if (bi % 4 === 0) playNoise(0.08, 0.07);         // kick
+    if (bi % 4 === 2) playNoise(0.05, 0.04);          // snare
+    if (bi % 2 === 0) playNoise(0.02, 0.02);          // hi-hat
 
     beatIndex++;
     musicInterval = setTimeout(doMusicBeat, beatMs);
