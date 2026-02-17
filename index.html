@@ -28,11 +28,13 @@ const ROBOT_MAX_SPEED = 1.45;
 // ═══════════════════════════════════════════════════════════════
 // CANVAS SETUP
 // ═══════════════════════════════════════════════════════════════
+const RENDER_SCALE = 2; // render at 2x resolution for sharper text/sprites
 const displayCanvas = document.getElementById('display');
 const displayCtx = displayCanvas.getContext('2d');
 const buffer = document.createElement('canvas');
-buffer.width = GAME_W; buffer.height = GAME_H;
+buffer.width = GAME_W * RENDER_SCALE; buffer.height = GAME_H * RENDER_SCALE;
 const ctx = buffer.getContext('2d');
+ctx.scale(RENDER_SCALE, RENDER_SCALE);
 
 function resize() {
     const aspect = GAME_W / GAME_H;
