@@ -24,4 +24,6 @@ Un solo archivo HTML. Cero dependencias. Puro vibe.
 
 ## 🚀 Cómo jugar
 
-Abre `index.html` en cualquier navegador moderno. No requiere instalación ni servidor.
+<a href="https://kyberkritik.github.io/escapeFabrica/" target="_blank">▶️ Jugar ahora</a>
+
+O abre `index.html` en cualquier navegador moderno. No requiere instalación ni servidor.
